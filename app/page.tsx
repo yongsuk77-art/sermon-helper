@@ -14,6 +14,7 @@ import MarkdownView from "@/components/MarkdownView";
 import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
 import { markdownToDocxBlob } from "@/lib/docx";
 import { AI_OPTIONS, DEFAULT_AI_KEY, findAi } from "@/lib/models";
+import { buildWorksheet, buildWorksheetSet } from "@/lib/worksheet";
 import SettingsModal from "@/components/SettingsModal";
 import ManuscriptModal from "@/components/ManuscriptModal";
 import {
@@ -89,6 +90,12 @@ export default function Page() {
     window.setTimeout(() => setToast(""), 2200);
   }, []);
 
+  const confirmAiUse = useCallback((task: string, calls = 1) => {
+    return window.confirm(
+      `${task}\n\nAI API를 ${calls}회 호출합니다. 사용량에 따라 비용이 발생할 수 있습니다. 계속할까요?`,
+    );
+  }, []);
+
   // 저장은 스트리밍 완료 직후에 일어나는데, 그 시점의 results 상태는 아직
   // 반영 전이라 stale 하다. 그래서 "완료된 결과"를 ref로 들고 있다가 저장한다.
   const resultsRef = useRef<Partial<Record<ResultKey, string>>>({});
@@ -130,7 +137,9 @@ export default function Page() {
         body: JSON.stringify(payload),
       });
       if (!res.ok || !res.body) {
-        const j = await res.json().catch(() => ({ error: `오류 ${res.status}` }));
+        const j = (await res
+          .json()
+          .catch(() => ({ error: `오류 ${res.status}` }))) as { error?: string };
         const msg = `⚠️ ${j.error || "요청에 실패했습니다."}`;
         onDelta(msg);
         return msg;
@@ -149,6 +158,39 @@ export default function Page() {
     [],
   );
 
+  // ── 비용 없는 워크시트 생성 ───────────────────────────────
+  const runWorksheet = useCallback(
+    (mode: ModeId) => {
+      if (!ctx.passage.trim()) {
+        showToast("먼저 성경 본문을 입력하세요.");
+        return;
+      }
+      if (loading || runningAll) return;
+      const text = buildWorksheet(mode, ctx);
+      const nextResults = { ...resultsRef.current, [mode]: text };
+      resultsRef.current = nextResults;
+      setActive(mode);
+      setResults(nextResults);
+      persistData(nextResults, qaLogRef.current);
+      showToast("AI 없이 무료 워크시트를 만들었습니다.");
+    },
+    [ctx, loading, runningAll, persistData, showToast],
+  );
+
+  const runAllWorksheets = useCallback(() => {
+    if (!ctx.passage.trim()) {
+      showToast("먼저 성경 본문을 입력하세요.");
+      return;
+    }
+    if (loading || runningAll) return;
+    const nextResults = { ...resultsRef.current, ...buildWorksheetSet(ctx) };
+    resultsRef.current = nextResults;
+    setActive("original");
+    setResults(nextResults);
+    persistData(nextResults, qaLogRef.current);
+    showToast("AI 없이 전체 워크시트를 만들었습니다.");
+  }, [ctx, loading, runningAll, persistData, showToast]);
+
   // ── 한 모드 생성 ─────────────────────────────────────────
   const run = useCallback(
     async (mode: ModeId) => {
@@ -157,6 +199,8 @@ export default function Page() {
         return;
       }
       if (loading) return;
+      const modeLabel = MODES.find((m) => m.id === mode)?.label || "선택 항목";
+      if (!confirmAiUse(`${modeLabel}을 AI로 생성/보강합니다.`)) return;
       setActive(mode);
       setLoading(mode);
       setResults((p) => ({ ...p, [mode]: "" }));
@@ -176,7 +220,7 @@ export default function Page() {
         persistData(resultsRef.current, qaLogRef.current);
       }
     },
-    [ctx, loading, callStream, persistData, showToast, ai],
+    [ctx, loading, callStream, persistData, showToast, ai, confirmAiUse],
   );
 
   // ── 전체 순서대로 생성 ───────────────────────────────────
@@ -186,6 +230,9 @@ export default function Page() {
       return;
     }
     if (loading || runningAll) return;
+    if (!confirmAiUse("전체 6개 항목을 AI로 생성/보강합니다.", MODES.length)) {
+      return;
+    }
     setRunningAll(true);
     for (const m of MODES) {
       setActive(m.id);
@@ -207,7 +254,7 @@ export default function Page() {
     }
     setRunningAll(false);
     showToast("전체 연구가 완료되었습니다.");
-  }, [ctx, loading, runningAll, callStream, persistData, showToast, ai]);
+  }, [ctx, loading, runningAll, callStream, persistData, showToast, ai, confirmAiUse]);
 
   // ── 자유 질문 ────────────────────────────────────────────
   const ask = useCallback(async () => {
@@ -218,6 +265,7 @@ export default function Page() {
       return;
     }
     if (loading) return;
+    if (!confirmAiUse("자유 질문 답변을 AI로 생성합니다.")) return;
     setActive("qa");
     setLoading("qa");
     setQaStreaming("");
@@ -247,7 +295,7 @@ export default function Page() {
     setQaQuestion("");
     setLoading(null);
     persistData(resultsRef.current, qaLogRef.current);
-  }, [qaQuestion, ctx, loading, results, callStream, persistData, showToast, ai]);
+  }, [qaQuestion, ctx, loading, results, callStream, persistData, showToast, ai, confirmAiUse]);
 
   // ── 세션 불러오기 / 새로 시작 / 삭제 ─────────────────────
   const openSession = useCallback((s: SavedSession) => {
@@ -442,7 +490,7 @@ export default function Page() {
         <section className="rounded-2xl border border-ink-100 bg-white/70 p-4 shadow-sm">
           {/* AI 선택 */}
           <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl bg-ink-50/60 px-3 py-2">
-            <span className="text-xs font-semibold text-ink-700">🤖 분석 AI</span>
+            <span className="text-xs font-semibold text-ink-700">🤖 AI 보강</span>
             <select
               value={aiKey}
               onChange={(e) => changeAi(e.target.value)}
@@ -458,6 +506,9 @@ export default function Page() {
               {ai.provider === "claude"
                 ? "기본 · 원어/신학에 강함"
                 : "비교용 · API 키 설정 필요"}
+            </span>
+            <span className="basis-full text-[11px] leading-relaxed text-ink-700/60">
+              비용 없이 시작하려면 무료 워크시트를 만들고, 필요한 항목만 AI로 보강하세요.
             </span>
           </div>
 
@@ -507,11 +558,18 @@ export default function Page() {
 
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <button
+              onClick={runAllWorksheets}
+              disabled={!!loading || runningAll}
+              className="inline-flex items-center gap-2 rounded-xl border border-gold-200 bg-white px-4 py-2.5 text-sm font-semibold text-gold-700 shadow-sm hover:bg-gold-50 disabled:opacity-50"
+            >
+              📝 AI 없이 전체 워크시트
+            </button>
+            <button
               onClick={runAll}
               disabled={!!loading || runningAll}
               className="inline-flex items-center gap-2 rounded-xl bg-gold-600 px-4 py-2.5 text-sm font-semibold text-white shadow hover:bg-gold-500 disabled:opacity-50"
             >
-              {runningAll ? <Spinner /> : "✨"} 한 번에 전체 준비
+              {runningAll ? <Spinner /> : "✨"} AI로 전체 보강
             </button>
             {hasAny && (
               <>
@@ -537,8 +595,8 @@ export default function Page() {
             )}
           </div>
           <p className="mt-2 text-[11px] leading-relaxed text-ink-700/60">
-            각 항목 버튼을 누르면 해당 분석만 생성됩니다. 결과는 이 기기에 자동
-            저장되며 「기록」에서 다시 볼 수 있습니다.
+            무료 워크시트는 API 호출이 없고, AI 보강과 자유 질문은 호출 전에 비용 확인창이 뜹니다.
+            결과는 이 기기에 자동 저장되며 「기록」에서 다시 볼 수 있습니다.
           </p>
         </section>
 
@@ -605,6 +663,7 @@ export default function Page() {
               blurb={activeMode?.blurb || ""}
               text={results[active as ModeId]}
               loading={loading === (active as ModeId)}
+              onWorksheet={() => runWorksheet(active as ModeId)}
               onRun={() => run(active as ModeId)}
               onCopy={() =>
                 copyText(results[active as ModeId] || "")
@@ -781,6 +840,7 @@ function ResultPanel({
   blurb,
   text,
   loading,
+  onWorksheet,
   onRun,
   onCopy,
   onDownload,
@@ -790,6 +850,7 @@ function ResultPanel({
   blurb: string;
   text?: string;
   loading: boolean;
+  onWorksheet: () => void;
   onRun: () => void;
   onCopy: () => void;
   onDownload: () => void;
@@ -821,18 +882,25 @@ function ResultPanel({
             </>
           )}
           <button
+            onClick={onWorksheet}
+            disabled={loading}
+            className="rounded-lg border border-gold-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-gold-700 hover:bg-gold-50 disabled:opacity-50"
+          >
+            {text ? "무료 양식 다시" : "무료 양식"}
+          </button>
+          <button
             onClick={onRun}
             disabled={loading}
             className="rounded-lg bg-gold-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-gold-500 disabled:opacity-50"
           >
-            {loading ? "생성 중…" : text ? "다시 생성" : "생성"}
+            {loading ? "AI 생성 중…" : text ? "AI 보강" : "AI 생성"}
           </button>
         </div>
       </div>
 
       {!text && !loading && (
         <div className="py-12 text-center text-sm text-ink-700/50">
-          「생성」을 누르면 이 항목을 분석합니다.
+          비용 없이 시작하려면 「무료 양식」을 누르세요. 필요할 때만 AI로 보강할 수 있습니다.
         </div>
       )}
       {loading && !text && (
@@ -876,7 +944,7 @@ function QaPanel({
       </h2>
       <p className="mt-0.5 text-xs text-ink-700/60">
         본문{passage ? ` (${passage})` : ""}에 대해 무엇이든 물어보세요. 원어,
-        배경, 적용, 예화 등.
+        배경, 적용, 예화 등. 답변 생성에는 AI API 비용이 발생할 수 있습니다.
       </p>
 
       <div className="mt-3 flex gap-2">
@@ -895,7 +963,7 @@ function QaPanel({
           disabled={loading || !question.trim()}
           className="shrink-0 rounded-xl bg-gold-600 px-4 text-sm font-semibold text-white hover:bg-gold-500 disabled:opacity-50"
         >
-          {loading ? <Spinner /> : "질문"}
+          {loading ? <Spinner /> : "AI 질문"}
         </button>
       </div>
 
