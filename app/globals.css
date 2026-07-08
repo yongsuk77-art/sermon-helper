@@ -1,0 +1,124 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+}
+
+body {
+  background:
+    radial-gradient(1200px 600px at 50% -10%, #fffdf7 0%, #f6f5f3 55%, #efece6 100%);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* iOS safe-area helpers */
+.safe-pb {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.safe-pt {
+  padding-top: env(safe-area-inset-top);
+}
+
+/* ─── Markdown 결과물 스타일 (prose) ─────────────────────── */
+.prose-sermon {
+  line-height: 1.8;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+  font-size: var(--reading-size, 16px);
+  font-family: var(--reading-font, inherit);
+}
+.prose-sermon h1,
+.prose-sermon h2,
+.prose-sermon h3,
+.prose-sermon h4 {
+  font-weight: 700;
+  line-height: 1.35;
+  margin: 1.4em 0 0.6em;
+  color: #2a2620;
+}
+.prose-sermon h1 { font-size: 1.5rem; }
+.prose-sermon h2 {
+  font-size: 1.25rem;
+  border-bottom: 2px solid #e8e5df;
+  padding-bottom: 0.25em;
+}
+.prose-sermon h3 { font-size: 1.1rem; color: #9a7322; }
+.prose-sermon h4 { font-size: 1rem; }
+.prose-sermon p { margin: 0.7em 0; }
+.prose-sermon ul,
+.prose-sermon ol { margin: 0.6em 0; padding-left: 1.4em; }
+.prose-sermon li { margin: 0.3em 0; }
+.prose-sermon ul { list-style: disc; }
+.prose-sermon ol { list-style: decimal; }
+.prose-sermon strong { color: #1c1915; font-weight: 700; }
+.prose-sermon em { color: #6b5f2e; }
+.prose-sermon blockquote {
+  border-left: 4px solid #c9a24a;
+  background: #fbf7ec;
+  margin: 1em 0;
+  padding: 0.5em 1em;
+  border-radius: 0 6px 6px 0;
+  color: #4a4239;
+}
+.prose-sermon code {
+  background: #f0ede6;
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+.prose-sermon pre {
+  background: #2a2620;
+  color: #f6f5f3;
+  padding: 1em;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+.prose-sermon pre code { background: transparent; padding: 0; color: inherit; }
+.prose-sermon table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1em 0;
+  font-size: 0.92rem;
+  display: block;
+  overflow-x: auto;
+}
+.prose-sermon th,
+.prose-sermon td {
+  border: 1px solid #e0dcd3;
+  padding: 0.5em 0.7em;
+  text-align: left;
+  vertical-align: top;
+}
+.prose-sermon th { background: #f3efe6; font-weight: 700; }
+.prose-sermon hr { border: none; border-top: 1px solid #e8e5df; margin: 1.5em 0; }
+.prose-sermon a { color: #9a7322; text-decoration: underline; }
+
+/* 스피너 */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 0.8s linear infinite; }
+
+/* ─── 강조 색 테마 (설정에서 변경) ───────────────────────────
+   --ac / --ac-l 을 색상별로 정의하고, 골드 유틸리티 클래스를 이 변수로
+   덮어쓴다. 기본(골드)은 fallback 값이라 그대로 유지된다. */
+:root { --ac: #9a7322; --ac-l: #b58a2e; }
+:root[data-accent="blue"]   { --ac: #2563eb; --ac-l: #3b82f6; }
+:root[data-accent="green"]  { --ac: #16a34a; --ac-l: #22c55e; }
+:root[data-accent="purple"] { --ac: #7c3aed; --ac-l: #8b5cf6; }
+:root[data-accent="rose"]   { --ac: #e11d48; --ac-l: #f43f5e; }
+:root[data-accent="teal"]   { --ac: #0d9488; --ac-l: #14b8a6; }
+
+.bg-gold-600 { background-color: var(--ac) !important; }
+.hover\:bg-gold-500:hover { background-color: var(--ac-l) !important; }
+.text-gold-600 { color: var(--ac) !important; }
+.text-gold-700 { color: var(--ac) !important; }
+.border-gold-500 { border-color: var(--ac) !important; }
+.border-gold-400 { border-color: var(--ac-l) !important; }
+.focus\:border-gold-400:focus { border-color: var(--ac-l) !important; }
+.prose-sermon blockquote { border-left-color: var(--ac-l) !important; }
