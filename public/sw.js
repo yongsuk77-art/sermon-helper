@@ -1,6 +1,6 @@
 // 아주 가벼운 서비스 워커 — 앱 설치(PWA) 가능 + 오프라인 시 셸 폴백.
 // 분석 결과는 항상 최신 API 응답이 필요하므로 네트워크 우선 전략을 씁니다.
-const CACHE = "sermon-helper-v1";
+const CACHE = "sermon-helper-v2";
 const SHELL = ["/", "/icon.svg", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {

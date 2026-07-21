@@ -2,14 +2,14 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "설교 준비 도우미",
+  title: "설교 준비 어시스트",
   description:
-    "성경 본문 원어 분석 · 영적 통찰 · 번역본 비교 · 유대 문헌 · 주석 강해 · 설교 개요를 한 곳에서. 설교자를 위한 본문 연구 도구.",
+    "정확한 본문 해석부터 신학적 통찰, 설교 유산, 삶의 적용, 설교 설계와 최종 검토까지 연결하는 설교 준비 도구.",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "설교 도우미",
+    title: "설교 어시스트",
   },
   icons: {
     icon: "/icon.svg",

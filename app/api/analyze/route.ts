@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { buildMessages, buildQaMessages } from "@/lib/prompts";
-import type { ModeId, SermonContext } from "@/lib/types";
+import { isModeId, type ModeId, type SermonContext } from "@/lib/types";
 import type { Provider } from "@/lib/models";
 
 export const runtime = "nodejs";
@@ -154,19 +154,27 @@ export async function POST(req: Request) {
     return Response.json({ error: "잘못된 요청입니다." }, { status: 400 });
   }
 
-  const { mode, context, question, priorResults } = body;
-  const provider: Provider = body.provider || "claude";
+  const { mode, context, question } = body;
+  const priorResults = (body.priorResults || "").slice(0, 30000);
+  const provider: Provider = ["claude", "openai", "gemini"].includes(
+    body.provider || "",
+  )
+    ? (body.provider as Provider)
+    : "claude";
   if (!context?.passage?.trim()) {
     return Response.json({ error: "성경 본문을 입력하세요." }, { status: 400 });
   }
   if (mode === "qa" && !question?.trim()) {
     return Response.json({ error: "질문을 입력하세요." }, { status: 400 });
   }
+  if (mode !== "qa" && !isModeId(mode)) {
+    return Response.json({ error: "지원하지 않는 연구 단계입니다." }, { status: 400 });
+  }
 
   const { system, user } =
     mode === "qa"
       ? buildQaMessages(context, question || "", priorResults || "")
-      : buildMessages(mode, context);
+      : buildMessages(mode, context, priorResults);
 
   const model = resolveModel(provider, body.model);
   const args: RunArgs = { model, system, user };

@@ -1,7 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { MODES, type ModeId, type SermonContext, type SavedSession } from "@/lib/types";
+import {
+  MODES,
+  type ModeId,
+  type ResultKey,
+  type SermonContext,
+  type SavedSession,
+} from "@/lib/types";
 import {
   loadSessions,
   saveSession,
@@ -17,6 +23,7 @@ import { AI_OPTIONS, DEFAULT_AI_KEY, findAi } from "@/lib/models";
 import { buildWorksheet, buildWorksheetSet } from "@/lib/worksheet";
 import SettingsModal from "@/components/SettingsModal";
 import ManuscriptModal from "@/components/ManuscriptModal";
+import { ResearchLibrary } from "@/components/ResearchLibrary";
 import {
   type AppSettings,
   DEFAULT_SETTINGS,
@@ -25,20 +32,48 @@ import {
   applySettings,
 } from "@/lib/settings";
 
-type ResultKey = ModeId | "qa";
-
 const EMPTY_CTX: SermonContext = {
   passage: "",
   theme: "",
   audience: "",
   occasion: "",
+  pastoralNeed: "",
+  tradition: "",
+  preferredVoices: "",
+  duration: "",
   notes: "",
 };
+
+function collectPriorResults(
+  mode: ModeId,
+  results: Partial<Record<ResultKey, string>>,
+) {
+  const targetIndex = MODES.findIndex((item) => item.id === mode);
+  if (targetIndex <= 0) return "";
+  return MODES.slice(0, targetIndex)
+    .flatMap((item) => {
+      const text = results[item.id]?.trim();
+      return text
+        ? [`# 앞 단계: ${item.label}\n\n${text.slice(0, 5000)}`]
+        : [];
+    })
+    .join("\n\n---\n\n")
+    .slice(0, 28000);
+}
+
+function collectAllResults(results: Partial<Record<ResultKey, string>>) {
+  return MODES.flatMap((item) => {
+    const text = results[item.id]?.trim();
+    return text ? [`# ${item.label}\n\n${text.slice(0, 3500)}`] : [];
+  })
+    .join("\n\n---\n\n")
+    .slice(0, 20000);
+}
 
 export default function Page() {
   const [ctx, setCtx] = useState<SermonContext>(EMPTY_CTX);
   const [results, setResults] = useState<Partial<Record<ResultKey, string>>>({});
-  const [active, setActive] = useState<ResultKey>("original");
+  const [active, setActive] = useState<ResultKey>("exegesis");
   const [loading, setLoading] = useState<ResultKey | null>(null);
   const [runningAll, setRunningAll] = useState(false);
 
@@ -51,6 +86,7 @@ export default function Page() {
   const [qaStreaming, setQaStreaming] = useState("");
 
   const [toast, setToast] = useState("");
+  const toastTimer = useRef<number | null>(null);
 
   // 선택한 AI (기기에 저장)
   const [aiKey, setAiKey] = useState<string>(DEFAULT_AI_KEY);
@@ -68,6 +104,9 @@ export default function Page() {
     const s = loadSettings();
     setSettings(s);
     applySettings(s);
+    return () => {
+      if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    };
   }, []);
 
   const changeSettings = useCallback((s: AppSettings) => {
@@ -87,7 +126,8 @@ export default function Page() {
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
-    window.setTimeout(() => setToast(""), 2200);
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(""), 2200);
   }, []);
 
   const confirmAiUse = useCallback((task: string, calls = 1) => {
@@ -185,7 +225,7 @@ export default function Page() {
     if (loading || runningAll) return;
     const nextResults = { ...resultsRef.current, ...buildWorksheetSet(ctx) };
     resultsRef.current = nextResults;
-    setActive("original");
+    setActive("exegesis");
     setResults(nextResults);
     persistData(nextResults, qaLogRef.current);
     showToast("AI 없이 전체 워크시트를 만들었습니다.");
@@ -207,7 +247,13 @@ export default function Page() {
       let finalText = "";
       try {
         finalText = await callStream(
-          { mode, context: ctx, provider: ai.provider, model: ai.model },
+          {
+            mode,
+            context: ctx,
+            priorResults: collectPriorResults(mode, resultsRef.current),
+            provider: ai.provider,
+            model: ai.model,
+          },
           (acc) => setResults((p) => ({ ...p, [mode]: acc })),
         );
       } catch (e) {
@@ -230,7 +276,12 @@ export default function Page() {
       return;
     }
     if (loading || runningAll) return;
-    if (!confirmAiUse("전체 6개 항목을 AI로 생성/보강합니다.", MODES.length)) {
+    if (
+      !confirmAiUse(
+        `연결된 ${MODES.length}단계 깊이 연구를 시작합니다. 각 단계는 앞선 결과를 이어받습니다.`,
+        MODES.length,
+      )
+    ) {
       return;
     }
     setRunningAll(true);
@@ -241,7 +292,13 @@ export default function Page() {
       let finalText = "";
       try {
         finalText = await callStream(
-          { mode: m.id, context: ctx, provider: ai.provider, model: ai.model },
+          {
+            mode: m.id,
+            context: ctx,
+            priorResults: collectPriorResults(m.id, resultsRef.current),
+            provider: ai.provider,
+            model: ai.model,
+          },
           (acc) => setResults((p) => ({ ...p, [m.id]: acc })),
         );
       } catch (e) {
@@ -269,10 +326,7 @@ export default function Page() {
     setActive("qa");
     setLoading("qa");
     setQaStreaming("");
-    const prior = MODES.map((m) => results[m.id])
-      .filter(Boolean)
-      .join("\n\n")
-      .slice(0, 6000);
+    const prior = collectAllResults(results);
     let answer = "";
     try {
       answer = await callStream(
@@ -306,7 +360,7 @@ export default function Page() {
     setResults(s.results || {});
     setQaLog(s.qaLog || []);
     setQaStreaming("");
-    setActive("original");
+    setActive("exegesis");
     setShowHistory(false);
   }, []);
 
@@ -318,7 +372,7 @@ export default function Page() {
     setResults({});
     setQaLog([]);
     setQaStreaming("");
-    setActive("original");
+    setActive("exegesis");
     setShowHistory(false);
   }, []);
 
@@ -433,6 +487,8 @@ export default function Page() {
 
   const hasAny = MODES.some((m) => results[m.id]) || qaLog.length > 0;
   const activeMode = MODES.find((m) => m.id === active);
+  const completedCount = MODES.filter((m) => results[m.id]?.trim()).length;
+  const currentStage = MODES.find((m) => m.id === loading);
 
   return (
     <div className="min-h-screen">
@@ -440,39 +496,45 @@ export default function Page() {
 
       {/* 헤더 */}
       <header className="safe-pt sticky top-0 z-30 border-b border-ink-100/70 bg-[#fffdf7]/85 backdrop-blur">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
-          <div className="flex items-center gap-2">
-            <span className="text-2xl">📖</span>
+        <div className="mx-auto flex max-w-5xl items-center justify-between gap-2 px-3 py-3 sm:px-4">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="text-xl sm:text-2xl">📖</span>
             <div>
-              <h1 className="text-lg font-bold leading-tight text-ink-900">
-                설교 준비 도우미
+              <h1 className="whitespace-nowrap text-base font-bold leading-tight text-ink-900 sm:text-lg">
+                설교 준비 어시스트
               </h1>
-              <p className="text-[11px] text-ink-700/70">
-                본문 · 원어 · 번역 · 유대 · 주석 · 설교
+              <p className="hidden text-[11px] text-ink-700/70 sm:block">
+                정확한 해석에서 깊은 적용까지, 연결형 설교 연구
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
             <button
               onClick={startNew}
-              className="rounded-lg border border-ink-100 px-3 py-1.5 text-xs font-medium text-ink-700 hover:bg-ink-50"
+              aria-label="새 연구"
+              className="rounded-lg border border-ink-100 px-2.5 py-1.5 text-xs font-medium text-ink-700 hover:bg-ink-50 sm:px-3"
             >
-              + 새 연구
+              <span aria-hidden="true">＋</span>
+              <span className="hidden sm:inline"> 새 연구</span>
             </button>
             <button
               onClick={() => {
                 setSessions(loadSessions());
                 setShowHistory(true);
               }}
-              className="rounded-lg border border-ink-100 px-3 py-1.5 text-xs font-medium text-ink-700 hover:bg-ink-50"
+              aria-label="저장된 연구"
+              className="rounded-lg border border-ink-100 px-2.5 py-1.5 text-xs font-medium text-ink-700 hover:bg-ink-50 sm:px-3"
             >
-              📚 기록
+              <span aria-hidden="true">📚</span>
+              <span className="hidden sm:inline"> 기록</span>
             </button>
             <button
               onClick={() => setShowManuscript(true)}
-              className="rounded-lg border border-ink-100 px-3 py-1.5 text-xs font-medium text-ink-700 hover:bg-ink-50"
+              aria-label="원고 도구"
+              className="rounded-lg border border-ink-100 px-2.5 py-1.5 text-xs font-medium text-ink-700 hover:bg-ink-50 sm:px-3"
             >
-              📄 원고
+              <span aria-hidden="true">📄</span>
+              <span className="hidden sm:inline"> 원고</span>
             </button>
             <button
               onClick={() => setShowSettings(true)}
@@ -508,7 +570,7 @@ export default function Page() {
                 : "비교용 · API 키 설정 필요"}
             </span>
             <span className="basis-full text-[11px] leading-relaxed text-ink-700/60">
-              비용 없이 시작하려면 무료 워크시트를 만들고, 필요한 항목만 AI로 보강하세요.
+              6단계가 앞선 연구를 이어받아 주해부터 최종 검토까지 한 흐름으로 완성합니다.
             </span>
           </div>
 
@@ -543,6 +605,33 @@ export default function Page() {
             />
           </div>
 
+          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field
+              label="청중의 현실 / 목회적 필요"
+              value={ctx.pastoralNeed || ""}
+              placeholder="예: 불안과 번아웃, 관계 단절, 믿음의 침체"
+              onChange={(v) => setCtx((c) => ({ ...c, pastoralNeed: v }))}
+            />
+            <Field
+              label="신학 전통 / 해석 관점"
+              value={ctx.tradition || ""}
+              placeholder="예: 장로교 개혁주의 / 주요 견해 균형 비교"
+              onChange={(v) => setCtx((c) => ({ ...c, tradition: v }))}
+            />
+            <Field
+              label="참고하고 싶은 설교자 / 저자"
+              value={ctx.preferredVoices || ""}
+              placeholder="예: 어거스틴, 칼뱅, 스펄전, 로이드존스, 팀 켈러"
+              onChange={(v) => setCtx((c) => ({ ...c, preferredVoices: v }))}
+            />
+            <Field
+              label="설교 시간"
+              value={ctx.duration || ""}
+              placeholder="예: 25분"
+              onChange={(v) => setCtx((c) => ({ ...c, duration: v }))}
+            />
+          </div>
+
           <div className="mt-3">
             <label className="mb-1 block text-xs font-semibold text-ink-700">
               메모 (선택)
@@ -550,7 +639,7 @@ export default function Page() {
             <textarea
               value={ctx.notes || ""}
               onChange={(e) => setCtx((c) => ({ ...c, notes: e.target.value }))}
-              placeholder="강조하고 싶은 점, 떠오른 아이디어 등"
+              placeholder="이미 묵상한 내용, 반드시 살릴 통찰, 피하고 싶은 표현 등"
               rows={2}
               className="w-full resize-y rounded-xl border border-ink-100 bg-white px-3 py-2 text-sm outline-none focus:border-gold-400 focus:ring-2 focus:ring-gold-400/20"
             />
@@ -569,7 +658,7 @@ export default function Page() {
               disabled={!!loading || runningAll}
               className="inline-flex items-center gap-2 rounded-xl bg-gold-600 px-4 py-2.5 text-sm font-semibold text-white shadow hover:bg-gold-500 disabled:opacity-50"
             >
-              {runningAll ? <Spinner /> : "✨"} AI로 전체 보강
+              {runningAll ? <Spinner /> : "✨"} 6단계 깊이 연구 시작
             </button>
             {hasAny && (
               <>
@@ -594,16 +683,36 @@ export default function Page() {
               </>
             )}
           </div>
+          <div className="mt-4 rounded-xl border border-ink-100 bg-ink-50/50 p-3">
+            <div className="flex items-center justify-between gap-3 text-xs">
+              <span className="font-semibold text-ink-800">
+                {currentStage
+                  ? `${currentStage.icon} ${currentStage.label} 진행 중`
+                  : completedCount === MODES.length
+                    ? "6단계 자료가 모두 준비되었습니다."
+                    : "연결형 설교 준비 진행률"}
+              </span>
+              <span className="shrink-0 font-medium text-ink-700/60">
+                {completedCount}/{MODES.length}
+              </span>
+            </div>
+            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-ink-100">
+              <div
+                className="h-full rounded-full bg-gold-600 transition-all duration-500"
+                style={{ width: `${(completedCount / MODES.length) * 100}%` }}
+              />
+            </div>
+          </div>
           <p className="mt-2 text-[11px] leading-relaxed text-ink-700/60">
-            무료 워크시트는 API 호출이 없고, AI 보강과 자유 질문은 호출 전에 비용 확인창이 뜹니다.
-            결과는 이 기기에 자동 저장되며 「기록」에서 다시 볼 수 있습니다.
+            무료 워크시트는 API 호출이 없습니다. AI 결과는 참고 초안이므로 원문·주석·인용
+            출처를 직접 확인하세요. 결과는 이 기기에 자동 저장됩니다.
           </p>
         </section>
 
         {/* 탭 */}
         <nav className="sticky top-[60px] z-20 -mx-4 mt-4 overflow-x-auto bg-[#fffdf7]/80 px-4 py-2 backdrop-blur">
           <div className="flex gap-1.5">
-            {MODES.map((m) => {
+            {MODES.map((m, index) => {
               const on = active === m.id;
               const done = !!results[m.id];
               const busy = loading === m.id;
@@ -617,6 +726,9 @@ export default function Page() {
                       : "border-ink-100 bg-white text-ink-700 hover:bg-ink-50"
                   }`}
                 >
+                  <span className={on ? "text-white/75" : "text-ink-700/40"}>
+                    {index + 1}
+                  </span>
                   <span>{m.icon}</span>
                   <span>{m.short}</span>
                   {busy ? (
@@ -656,26 +768,29 @@ export default function Page() {
               onCopy={copyText}
             />
           ) : (
-            <ResultPanel
-              key={active}
-              icon={activeMode?.icon || ""}
-              label={activeMode?.label || ""}
-              blurb={activeMode?.blurb || ""}
-              text={results[active as ModeId]}
-              loading={loading === (active as ModeId)}
-              onWorksheet={() => runWorksheet(active as ModeId)}
-              onRun={() => run(active as ModeId)}
-              onCopy={() =>
-                copyText(results[active as ModeId] || "")
-              }
-              onDownload={() =>
-                downloadDocx(
-                  results[active as ModeId] || "",
-                  `${safeName}_${activeMode?.short}`,
-                  `${ctx.passage} — ${activeMode?.label}`,
-                )
-              }
-            />
+            <>
+              {active === "voices" && (
+                <ResearchLibrary passage={ctx.passage} onCopy={copyText} />
+              )}
+              <ResultPanel
+                key={active}
+                icon={activeMode?.icon || ""}
+                label={activeMode?.label || ""}
+                blurb={activeMode?.blurb || ""}
+                text={results[active as ModeId]}
+                loading={loading === (active as ModeId)}
+                onWorksheet={() => runWorksheet(active as ModeId)}
+                onRun={() => run(active as ModeId)}
+                onCopy={() => copyText(results[active as ModeId] || "")}
+                onDownload={() =>
+                  downloadDocx(
+                    results[active as ModeId] || "",
+                    `${safeName}_${activeMode?.short}`,
+                    `${ctx.passage} — ${activeMode?.label}`,
+                  )
+                }
+              />
+            </>
           )}
         </section>
       </main>
@@ -756,7 +871,7 @@ export default function Page() {
                         {
                           MODES.filter((m) => s.results?.[m.id]).length
                         }
-                        /6 항목
+                        /{MODES.length} 단계
                       </p>
                     </button>
                     <button
@@ -943,8 +1058,8 @@ function QaPanel({
         💬 자유 질문
       </h2>
       <p className="mt-0.5 text-xs text-ink-700/60">
-        본문{passage ? ` (${passage})` : ""}에 대해 무엇이든 물어보세요. 원어,
-        배경, 적용, 예화 등. 답변 생성에는 AI API 비용이 발생할 수 있습니다.
+        본문{passage ? ` (${passage})` : ""}과 현재 연구에 대해 질문하세요. 원어,
+        다른 견해, 출처 검증, 적용 점검 등에 사용할 수 있습니다.
       </p>
 
       <div className="mt-3 flex gap-2">

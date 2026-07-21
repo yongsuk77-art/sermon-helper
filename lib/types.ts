@@ -1,78 +1,90 @@
 export type ModeId =
-  | "original"
-  | "insight"
-  | "translations"
-  | "jewish"
-  | "commentary"
-  | "outline";
+  | "exegesis"
+  | "theology"
+  | "voices"
+  | "application"
+  | "outline"
+  | "review";
+
+export type ResultKey = ModeId | "qa";
 
 export interface ModeMeta {
   id: ModeId;
-  label: string; // 탭 라벨
-  short: string; // 짧은 이름
-  icon: string; // 이모지
-  blurb: string; // 한 줄 설명
+  label: string;
+  short: string;
+  icon: string;
+  blurb: string;
 }
 
-// 분석 순서 = 설교 준비 순서 (원어 → 통찰 → 번역 → 유대 → 주석 → 개요)
+// 설교가 깊어지는 실제 순서: 본문 → 신학 → 설교 유산 → 삶 → 설계 → 검토
 export const MODES: ModeMeta[] = [
   {
-    id: "original",
-    label: "원어 분석 · 파싱",
-    short: "원어",
-    icon: "📜",
-    blurb: "히브리어/헬라어 단어별 분해, 어형(파싱), 핵심 단어 의미와 어근",
+    id: "exegesis",
+    label: "본문 해석 · 원문",
+    short: "본문 해석",
+    icon: "🔎",
+    blurb: "단락 경계·문맥·구조·원어·번역·본문비평을 묶어 본문의 의도를 정확히 찾습니다.",
   },
   {
-    id: "insight",
-    label: "영적 통찰",
-    short: "통찰",
-    icon: "🕊️",
-    blurb: "그리스도 중심 해석, 핵심 주제, 신학적 통찰과 적용의 씨앗",
+    id: "theology",
+    label: "신학 · 복음 · 통찰",
+    short: "신학 통찰",
+    icon: "🕯️",
+    blurb: "본문에서 하나님과 인간, 그리스도와 복음, 교회를 향한 영적 핵심을 길어 올립니다.",
   },
   {
-    id: "translations",
-    label: "번역본 비교",
-    short: "번역",
-    icon: "📖",
-    blurb: "개역개정·새번역·공동번역·NIV·ESV·KJV·직역 대조와 차이 분석",
+    id: "voices",
+    label: "설교자 · 고전 · 교회사",
+    short: "설교 유산",
+    icon: "🏛️",
+    blurb: "교부·종교개혁자·청교도·현대 강해자의 설교를 출처 중심으로 비교하고 배웁니다.",
   },
   {
-    id: "jewish",
-    label: "유대적 관점",
-    short: "유대",
-    icon: "✡️",
-    blurb: "미드라쉬·탈무드·타르굼, PaRDeS 해석, 제2성전기 배경",
-  },
-  {
-    id: "commentary",
-    label: "주석 · 강해",
-    short: "주석",
-    icon: "🗂️",
-    blurb: "본문 구조, 절별 주석, 역사·문법적 해석",
+    id: "application",
+    label: "삶 · 목회 적용",
+    short: "삶의 적용",
+    icon: "👣",
+    blurb: "청중의 마음과 현실에 복음이 닿도록 개인·가정·교회·일터의 구체적 순종을 설계합니다.",
   },
   {
     id: "outline",
-    label: "설교 개요",
-    short: "설교",
+    label: "설교 설계 · 개요",
+    short: "설교 설계",
     icon: "✍️",
-    blurb: "제목·핵심 한 문장·서론·대지·예화·적용·결론·기도",
+    blurb: "앞선 연구를 하나의 중심 문장과 흐름, 전환, 예화, 적용, 기도로 통합합니다.",
+  },
+  {
+    id: "review",
+    label: "본문 충실도 · 최종 검토",
+    short: "최종 검토",
+    icon: "🛡️",
+    blurb: "원어·문맥·신학·출처·적용을 다시 대조해 과장과 오류를 잡고 설교를 다듬습니다.",
   },
 ];
 
+const MODE_IDS = new Set<string>(MODES.map((mode) => mode.id));
+
+export function isModeId(value: unknown): value is ModeId {
+  return typeof value === "string" && MODE_IDS.has(value);
+}
+
 export interface SermonContext {
-  passage: string; // 본문 (예: 요한복음 3:16-21)
-  theme?: string; // 설교 주제/방향
-  audience?: string; // 청중 (장년/청년/새신자 등)
-  occasion?: string; // 절기/상황 (주일/부활절/심방 등)
-  notes?: string; // 추가 메모
+  passage: string;
+  theme?: string;
+  audience?: string;
+  occasion?: string;
+  pastoralNeed?: string;
+  tradition?: string;
+  preferredVoices?: string;
+  duration?: string;
+  notes?: string;
 }
 
 export interface SavedSession {
   id: string;
   passage: string;
   context: SermonContext;
-  results: Partial<Record<ModeId | "qa", string>>;
+  results: Partial<Record<ResultKey, string>>;
   qaLog?: { q: string; a: string }[];
   createdAt: number;
   updatedAt: number;

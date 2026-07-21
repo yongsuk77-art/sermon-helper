@@ -1,7 +1,7 @@
 {
-  "name": "설교 준비 도우미",
-  "short_name": "설교 도우미",
-  "description": "성경 본문 원어 분석 · 영적 통찰 · 번역본 비교 · 유대 문헌 · 주석 강해 · 설교 개요를 한 곳에서.",
+  "name": "설교 준비 어시스트",
+  "short_name": "설교 어시스트",
+  "description": "본문 해석부터 신학, 설교 유산, 삶의 적용, 설교 설계와 최종 검토까지 연결하는 설교 준비 도구.",
   "start_url": "/",
   "display": "standalone",
   "orientation": "portrait",
