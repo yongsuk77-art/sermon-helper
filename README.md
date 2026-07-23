@@ -30,7 +30,7 @@
 ## 기타 기능
 
 - AI 없는 6단계 직접 연구 워크시트
-- Claude, OpenAI, Gemini 선택 및 스트리밍 결과
+- 작업 방식 선택: 기본은 AI 없이 무료 워크시트, 필요할 때만 Claude Opus 4.8 / Sonnet 5 / Haiku 4.5, GPT, Gemini로 보강
 - 연구 결과를 이어받는 자유 질문
 - 브라우저 자동 저장, JSON 백업/복원, 이전 1.x 연구 자동 이관
 - 항목별 또는 전체 Word 문서 내보내기
@@ -41,23 +41,25 @@
 
 ```bash
 npm install
-copy .dev.vars.example .dev.vars
+copy .env.local.example .env.local
 npm run dev
 ```
 
 기본 주소는 `http://localhost:3000`입니다.
 
+Cloudflare Workers로 미리보기/배포할 때는 `.dev.vars.example`을 `.dev.vars`로 복사해 사용하세요.
+
 | 환경 변수 | 설명 | 기본값 |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | Claude 사용 시 필요 | — |
+| `ANTHROPIC_API_KEY` | (선택) Claude 사용 시. https://console.anthropic.com 에서 발급 | — |
 | `SERMON_MODEL` | 기본 Claude 모델 | `claude-opus-4-8` |
-| `SERMON_EFFORT` | Claude 추론 깊이 `low`/`medium`/`high` | `high` |
-| `OPENAI_API_KEY` | OpenAI 사용 시 필요 | — |
-| `OPENAI_MODEL` | OpenAI 모델 | `gpt-4o` |
-| `GEMINI_API_KEY` | Gemini 사용 시 필요 | — |
-| `GEMINI_MODEL` | Gemini 모델 | `gemini-1.5-pro` |
+| `SERMON_EFFORT` | 추론 깊이 `low`/`medium`/`high`/`xhigh` | `high` |
+| `OPENAI_API_KEY` | (선택) GPT 사용 시. https://platform.openai.com | — |
+| `OPENAI_MODEL` | (선택) OpenAI 모델 | `gpt-4o` |
+| `GEMINI_API_KEY` | (선택) Gemini 사용 시. https://aistudio.google.com/app/apikey | — |
+| `GEMINI_MODEL` | (선택) Gemini 모델 | `gemini-3.5-flash` |
 
-API 키는 Route Handler에서만 사용하며 브라우저로 전달하지 않습니다.
+앱 상단의 **작업 방식** 드롭다운은 기본값이 **AI 없이 기본값**입니다. 이 모드는 API 키와 비용 없이 무료 워크시트를 만듭니다. Claude·GPT·Gemini를 쓰려면 원하는 제공자의 키를 환경 변수에 추가하고 드롭다운에서 선택하세요. 모든 키는 **서버에서만** 쓰이며 브라우저에 노출되지 않습니다.
 
 ## 확인 명령
 
@@ -66,6 +68,16 @@ npm run lint
 npm run build
 npm run cf:build
 ```
+
+## Vercel 배포
+
+1. 저장소를 가져온 뒤 **Root Directory** 를 `sermon-helper` 또는 현재 앱 루트로 지정합니다.
+2. AI 없이 쓰려면 환경 변수 없이 배포해도 됩니다.
+3. Claude를 쓰려면 **Project Settings → Environment Variables** 에 `ANTHROPIC_API_KEY`를 추가하고, 필요하면 `SERMON_MODEL=claude-opus-4-8` 또는 `SERMON_MODEL=claude-sonnet-5`를 추가합니다.
+4. GPT를 쓰려면 `OPENAI_API_KEY`, Gemini를 쓰려면 `GEMINI_API_KEY`를 추가합니다.
+5. 환경 변수를 바꾼 뒤에는 반드시 **Redeploy** 해야 새 키가 적용됩니다.
+
+401 `invalid x-api-key`가 나오면 Vercel에 저장된 API 키가 비어 있거나 잘못된 것입니다. 새 키로 교체하고 Redeploy 하세요. 앱은 AI 연결이 실패해도 결과 칸을 에러로 멈추지 않고 무료 워크시트로 자동 전환합니다.
 
 ## 중요한 사용 원칙
 

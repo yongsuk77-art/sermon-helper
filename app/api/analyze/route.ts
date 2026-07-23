@@ -6,7 +6,12 @@ import type { Provider } from "@/lib/models";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-const EFFORT = (process.env.SERMON_EFFORT || "high") as "low" | "medium" | "high";
+const EFFORT = (process.env.SERMON_EFFORT || "high") as
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh";
+type AiProvider = Exclude<Provider, "free">;
 
 interface Body {
   mode: ModeId | "qa";
@@ -22,6 +27,100 @@ interface RunArgs {
   model: string;
   system: string;
   user: string;
+}
+
+function normalizeProvider(value: unknown): Provider {
+  if (
+    value === "free" ||
+    value === "claude" ||
+    value === "openai" ||
+    value === "gemini"
+  ) {
+    return value;
+  }
+  return "claude";
+}
+
+function providerLabel(provider: AiProvider) {
+  if (provider === "openai") return "OpenAI";
+  if (provider === "gemini") return "Gemini";
+  return "Claude";
+}
+
+function getErrorText(err: unknown) {
+  const parts: string[] = [];
+  if (err instanceof Error) parts.push(err.message);
+  if (err && typeof err === "object") {
+    const info = err as {
+      status?: unknown;
+      type?: unknown;
+      code?: unknown;
+      error?: unknown;
+    };
+    if (info.status) parts.push(String(info.status));
+    if (info.type) parts.push(String(info.type));
+    if (info.code) parts.push(String(info.code));
+    if (info.error) {
+      try {
+        parts.push(JSON.stringify(info.error));
+      } catch {
+        parts.push(String(info.error));
+      }
+    }
+  }
+  return parts.join(" ");
+}
+
+function formatProviderError(provider: AiProvider, err: unknown) {
+  const raw = getErrorText(err) || String(err || "");
+  const lower = raw.toLowerCase();
+  const label = providerLabel(provider);
+
+  if (
+    lower.includes("authentication_error") ||
+    lower.includes("api_key") ||
+    lower.includes("invalid x-api-key") ||
+    lower.includes("incorrect api key") ||
+    lower.includes("invalid api key") ||
+    lower.includes("설정되지") ||
+    lower.includes("401")
+  ) {
+    const envName =
+      provider === "openai"
+        ? "OPENAI_API_KEY"
+        : provider === "gemini"
+          ? "GEMINI_API_KEY"
+          : "ANTHROPIC_API_KEY";
+    return `${label} API 키가 없거나 올바르지 않습니다. Vercel Project Settings > Environment Variables에서 ${envName} 값을 새 키로 저장한 뒤 Redeploy 해 주세요.`;
+  }
+
+  if (
+    lower.includes("model") &&
+    (lower.includes("not found") ||
+      lower.includes("not_found") ||
+      lower.includes("invalid"))
+  ) {
+    const modelName =
+      provider === "openai"
+        ? "OPENAI_MODEL"
+        : provider === "gemini"
+          ? "GEMINI_MODEL"
+          : "SERMON_MODEL";
+    return `${label} 모델 이름을 확인해 주세요. Vercel 환경 변수 ${modelName} 값이 현재 API에서 사용 가능한 모델 ID여야 합니다.`;
+  }
+
+  if (
+    lower.includes("quota") ||
+    lower.includes("billing") ||
+    lower.includes("credit") ||
+    lower.includes("insufficient") ||
+    lower.includes("usage limit") ||
+    lower.includes("rate_limit")
+  ) {
+    return `${label} 계정의 사용량 한도나 결제 상태를 확인해 주세요.`;
+  }
+
+  return `${label} 호출 중 문제가 발생했습니다. 잠시 후 다시 시도하거나 다른 AI를 선택해 주세요.`;
 }
 
 // ── 공통 SSE 리더 (OpenAI · Gemini) ─────────────────────────
@@ -138,9 +237,9 @@ async function runGemini(onText: OnText, { model, system, user }: RunArgs) {
   });
 }
 
-function resolveModel(provider: Provider, clientModel?: string): string {
+function resolveModel(provider: AiProvider, clientModel?: string): string {
   if (provider === "openai") return process.env.OPENAI_MODEL || "gpt-4o";
-  if (provider === "gemini") return process.env.GEMINI_MODEL || "gemini-1.5-pro";
+  if (provider === "gemini") return process.env.GEMINI_MODEL || "gemini-3.5-flash";
   // claude — 클라이언트가 고른 티어만 허용(안전)
   if (clientModel && clientModel.startsWith("claude-")) return clientModel;
   return process.env.SERMON_MODEL || "claude-opus-4-8";
@@ -156,11 +255,7 @@ export async function POST(req: Request) {
 
   const { mode, context, question } = body;
   const priorResults = (body.priorResults || "").slice(0, 30000);
-  const provider: Provider = ["claude", "openai", "gemini"].includes(
-    body.provider || "",
-  )
-    ? (body.provider as Provider)
-    : "claude";
+  const provider = normalizeProvider(body.provider);
   if (!context?.passage?.trim()) {
     return Response.json({ error: "성경 본문을 입력하세요." }, { status: 400 });
   }
@@ -169,6 +264,12 @@ export async function POST(req: Request) {
   }
   if (mode !== "qa" && !isModeId(mode)) {
     return Response.json({ error: "지원하지 않는 연구 단계입니다." }, { status: 400 });
+  }
+  if (provider === "free") {
+    return Response.json(
+      { error: "AI 없이 기본값 모드는 API 호출이 필요 없습니다." },
+      { status: 400 },
+    );
   }
 
   const { system, user } =
@@ -188,9 +289,9 @@ export async function POST(req: Request) {
         else if (provider === "gemini") await runGemini(onText, args);
         else await runClaude(onText, args);
       } catch (err) {
-        const msg =
-          err instanceof Error ? err.message : "분석 중 오류가 발생했습니다.";
-        controller.enqueue(encoder.encode(`\n\n⚠️ 오류: ${msg}`));
+        controller.enqueue(
+          encoder.encode(`\n\n⚠️ AI 연결 오류: ${formatProviderError(provider, err)}`),
+        );
       } finally {
         controller.close();
       }

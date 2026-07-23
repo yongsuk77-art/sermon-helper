@@ -44,6 +44,9 @@ const EMPTY_CTX: SermonContext = {
   notes: "",
 };
 
+const AI_ERROR_MARK = "⚠️";
+const AI_MODE_VERSION = "2";
+
 function collectPriorResults(
   mode: ModeId,
   results: Partial<Record<ResultKey, string>>,
@@ -68,6 +71,42 @@ function collectAllResults(results: Partial<Record<ResultKey, string>>) {
   })
     .join("\n\n---\n\n")
     .slice(0, 20000);
+}
+
+function isAiError(text: string) {
+  return text.trimStart().startsWith(AI_ERROR_MARK);
+}
+
+function cleanAiError(text: string) {
+  return text
+    .replace(/^⚠️\s*(AI 연결 오류|오류):\s*/u, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 220);
+}
+
+function buildFallbackWorksheet(mode: ModeId, ctx: SermonContext, errorText?: string) {
+  const note = errorText
+    ? `\n\n> 확인 메시지: ${cleanAiError(errorText)}`
+    : "";
+
+  return `${buildWorksheet(mode, ctx)}
+
+---
+
+> AI 연결에 문제가 있어 API 호출 없이 작성 가능한 기본 워크시트로 자동 전환했습니다. Vercel 환경 변수의 API 키와 모델명을 확인한 뒤 같은 항목에서 다시 AI 보강을 누르면 됩니다.${note}`;
+}
+
+function buildQaFallback(question: string, errorText?: string) {
+  const note = errorText
+    ? `\n\n확인 메시지: ${cleanAiError(errorText)}`
+    : "";
+
+  return `AI 연결이 필요해 이 질문의 답변은 생성하지 못했습니다.
+
+- 질문: ${question}
+- 지금은 API 호출 없이 무료 워크시트로 설교 준비를 계속할 수 있습니다.
+- Vercel 환경 변수에 사용할 모델의 API 키를 넣은 뒤 다시 질문해 주세요.${note}`;
 }
 
 export default function Page() {
@@ -100,7 +139,22 @@ export default function Page() {
   useEffect(() => {
     setSessions(loadSessions());
     const saved = localStorage.getItem("sermon-helper:ai");
-    if (saved && AI_OPTIONS.some((o) => o.key === saved)) setAiKey(saved);
+    const savedVersion = localStorage.getItem("sermon-helper:ai-version");
+    if (
+      savedVersion === AI_MODE_VERSION &&
+      saved &&
+      AI_OPTIONS.some((o) => o.key === saved)
+    ) {
+      setAiKey(saved);
+    } else {
+      setAiKey(DEFAULT_AI_KEY);
+      try {
+        localStorage.setItem("sermon-helper:ai", DEFAULT_AI_KEY);
+        localStorage.setItem("sermon-helper:ai-version", AI_MODE_VERSION);
+      } catch {
+        /* 무시 */
+      }
+    }
     const s = loadSettings();
     setSettings(s);
     applySettings(s);
@@ -119,6 +173,7 @@ export default function Page() {
     setAiKey(key);
     try {
       localStorage.setItem("sermon-helper:ai", key);
+      localStorage.setItem("sermon-helper:ai-version", AI_MODE_VERSION);
     } catch {
       /* 무시 */
     }
@@ -239,6 +294,10 @@ export default function Page() {
         return;
       }
       if (loading) return;
+      if (ai.provider === "free") {
+        runWorksheet(mode);
+        return;
+      }
       const modeLabel = MODES.find((m) => m.id === mode)?.label || "선택 항목";
       if (!confirmAiUse(`${modeLabel}을 AI로 생성/보강합니다.`)) return;
       setActive(mode);
@@ -246,7 +305,7 @@ export default function Page() {
       setResults((p) => ({ ...p, [mode]: "" }));
       let finalText = "";
       try {
-        finalText = await callStream(
+        const streamed = await callStream(
           {
             mode,
             context: ctx,
@@ -256,8 +315,19 @@ export default function Page() {
           },
           (acc) => setResults((p) => ({ ...p, [mode]: acc })),
         );
+        if (isAiError(streamed)) {
+          finalText = buildFallbackWorksheet(mode, ctx, streamed);
+          showToast("AI 연결 실패로 무료 워크시트로 전환했습니다.");
+        } else {
+          finalText = streamed;
+        }
       } catch (e) {
-        finalText = `⚠️ 오류: ${e instanceof Error ? e.message : String(e)}`;
+        finalText = buildFallbackWorksheet(
+          mode,
+          ctx,
+          `⚠️ 오류: ${e instanceof Error ? e.message : String(e)}`,
+        );
+        showToast("AI 연결 실패로 무료 워크시트로 전환했습니다.");
         setResults((p) => ({ ...p, [mode]: finalText }));
       } finally {
         resultsRef.current = { ...resultsRef.current, [mode]: finalText };
@@ -266,7 +336,7 @@ export default function Page() {
         persistData(resultsRef.current, qaLogRef.current);
       }
     },
-    [ctx, loading, callStream, persistData, showToast, ai, confirmAiUse],
+    [ctx, loading, callStream, persistData, showToast, ai, confirmAiUse, runWorksheet],
   );
 
   // ── 전체 순서대로 생성 ───────────────────────────────────
@@ -276,6 +346,10 @@ export default function Page() {
       return;
     }
     if (loading || runningAll) return;
+    if (ai.provider === "free") {
+      runAllWorksheets();
+      return;
+    }
     if (
       !confirmAiUse(
         `연결된 ${MODES.length}단계 깊이 연구를 시작합니다. 각 단계는 앞선 결과를 이어받습니다.`,
@@ -285,24 +359,40 @@ export default function Page() {
       return;
     }
     setRunningAll(true);
+    let usedFallback = false;
     for (const m of MODES) {
       setActive(m.id);
       setLoading(m.id);
       setResults((p) => ({ ...p, [m.id]: "" }));
       let finalText = "";
       try {
-        finalText = await callStream(
-          {
-            mode: m.id,
-            context: ctx,
-            priorResults: collectPriorResults(m.id, resultsRef.current),
-            provider: ai.provider,
-            model: ai.model,
-          },
-          (acc) => setResults((p) => ({ ...p, [m.id]: acc })),
-        );
+        if (usedFallback) {
+          finalText = buildFallbackWorksheet(m.id, ctx);
+        } else {
+          const streamed = await callStream(
+            {
+              mode: m.id,
+              context: ctx,
+              priorResults: collectPriorResults(m.id, resultsRef.current),
+              provider: ai.provider,
+              model: ai.model,
+            },
+            (acc) => setResults((p) => ({ ...p, [m.id]: acc })),
+          );
+          if (isAiError(streamed)) {
+            usedFallback = true;
+            finalText = buildFallbackWorksheet(m.id, ctx, streamed);
+          } else {
+            finalText = streamed;
+          }
+        }
       } catch (e) {
-        finalText = `⚠️ 오류: ${e instanceof Error ? e.message : String(e)}`;
+        usedFallback = true;
+        finalText = buildFallbackWorksheet(
+          m.id,
+          ctx,
+          `⚠️ 오류: ${e instanceof Error ? e.message : String(e)}`,
+        );
       }
       resultsRef.current = { ...resultsRef.current, [m.id]: finalText };
       setResults((p) => ({ ...p, [m.id]: finalText }));
@@ -310,8 +400,22 @@ export default function Page() {
       persistData(resultsRef.current, qaLogRef.current);
     }
     setRunningAll(false);
-    showToast("전체 연구가 완료되었습니다.");
-  }, [ctx, loading, runningAll, callStream, persistData, showToast, ai, confirmAiUse]);
+    showToast(
+      usedFallback
+        ? "AI 연결 실패로 기본 워크시트까지 채웠습니다."
+        : "전체 연구가 완료되었습니다.",
+    );
+  }, [
+    ctx,
+    loading,
+    runningAll,
+    callStream,
+    persistData,
+    showToast,
+    ai,
+    confirmAiUse,
+    runAllWorksheets,
+  ]);
 
   // ── 자유 질문 ────────────────────────────────────────────
   const ask = useCallback(async () => {
@@ -322,6 +426,16 @@ export default function Page() {
       return;
     }
     if (loading) return;
+    if (ai.provider === "free") {
+      const answer = buildQaFallback(q);
+      qaLogRef.current = [...qaLogRef.current, { q, a: answer }];
+      setQaLog(qaLogRef.current);
+      setQaQuestion("");
+      setActive("qa");
+      persistData(resultsRef.current, qaLogRef.current);
+      showToast("자유 질문은 AI 모델을 선택한 뒤 사용할 수 있습니다.");
+      return;
+    }
     if (!confirmAiUse("자유 질문 답변을 AI로 생성합니다.")) return;
     setActive("qa");
     setLoading("qa");
@@ -340,8 +454,16 @@ export default function Page() {
         },
         (acc) => setQaStreaming(acc),
       );
+      if (isAiError(answer)) {
+        answer = buildQaFallback(q, answer);
+        showToast("AI 연결 오류를 확인해 주세요.");
+      }
     } catch (e) {
-      answer = `⚠️ 오류: ${e instanceof Error ? e.message : String(e)}`;
+      answer = buildQaFallback(
+        q,
+        `⚠️ 오류: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      showToast("AI 연결 오류를 확인해 주세요.");
     }
     qaLogRef.current = [...qaLogRef.current, { q, a: answer }];
     setQaLog(qaLogRef.current);
@@ -489,6 +611,7 @@ export default function Page() {
   const activeMode = MODES.find((m) => m.id === active);
   const completedCount = MODES.filter((m) => results[m.id]?.trim()).length;
   const currentStage = MODES.find((m) => m.id === loading);
+  const isFreeMode = ai.provider === "free";
 
   return (
     <div className="min-h-screen">
@@ -550,9 +673,9 @@ export default function Page() {
       <main className="mx-auto max-w-5xl px-4 pb-28 pt-4">
         {/* 입력 카드 */}
         <section className="rounded-2xl border border-ink-100 bg-white/70 p-4 shadow-sm">
-          {/* AI 선택 */}
+          {/* 작업 방식 선택 */}
           <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl bg-ink-50/60 px-3 py-2">
-            <span className="text-xs font-semibold text-ink-700">🤖 AI 보강</span>
+            <span className="text-xs font-semibold text-ink-700">🧭 작업 방식</span>
             <select
               value={aiKey}
               onChange={(e) => changeAi(e.target.value)}
@@ -565,12 +688,16 @@ export default function Page() {
               ))}
             </select>
             <span className="text-[11px] text-ink-700/50">
-              {ai.provider === "claude"
-                ? "기본 · 원어/신학에 강함"
-                : "비교용 · API 키 설정 필요"}
+              {isFreeMode
+                ? "기본 · API 호출 없음"
+                : ai.provider === "claude"
+                  ? "AI 보강 · Vercel에 Anthropic 키 필요"
+                  : "AI 보강 · 해당 제공자 API 키 필요"}
             </span>
             <span className="basis-full text-[11px] leading-relaxed text-ink-700/60">
-              6단계가 앞선 연구를 이어받아 주해부터 최종 검토까지 한 흐름으로 완성합니다.
+              {isFreeMode
+                ? "현재는 비용 없이 기본 워크시트를 만듭니다. Claude/GPT/Gemini를 선택하면 6단계가 앞선 연구를 이어받아 한 흐름으로 보강됩니다."
+                : "6단계가 앞선 연구를 이어받아 주해부터 최종 검토까지 완성합니다. 키가 없거나 틀리면 자동으로 기본 워크시트로 전환됩니다."}
             </span>
           </div>
 
@@ -658,7 +785,8 @@ export default function Page() {
               disabled={!!loading || runningAll}
               className="inline-flex items-center gap-2 rounded-xl bg-gold-600 px-4 py-2.5 text-sm font-semibold text-white shadow hover:bg-gold-500 disabled:opacity-50"
             >
-              {runningAll ? <Spinner /> : "✨"} 6단계 깊이 연구 시작
+              {runningAll ? <Spinner /> : isFreeMode ? "📝" : "✨"}{" "}
+              {isFreeMode ? "기본값으로 전체 작업" : "6단계 깊이 연구 시작"}
             </button>
             {hasAny && (
               <>
@@ -704,8 +832,8 @@ export default function Page() {
             </div>
           </div>
           <p className="mt-2 text-[11px] leading-relaxed text-ink-700/60">
-            무료 워크시트는 API 호출이 없습니다. AI 결과는 참고 초안이므로 원문·주석·인용
-            출처를 직접 확인하세요. 결과는 이 기기에 자동 저장됩니다.
+            무료 워크시트는 API 호출이 없습니다. AI 보강과 자유 질문은 모델을 선택한 뒤 비용 확인창을 거칩니다.
+            AI 결과는 참고 초안이므로 원문·주석·인용 출처를 직접 확인하세요. 결과는 이 기기에 자동 저장됩니다.
           </p>
         </section>
 
@@ -766,6 +894,7 @@ export default function Page() {
               setQuestion={setQaQuestion}
               onAsk={ask}
               onCopy={copyText}
+              freeMode={isFreeMode}
             />
           ) : (
             <>
@@ -779,6 +908,7 @@ export default function Page() {
                 blurb={activeMode?.blurb || ""}
                 text={results[active as ModeId]}
                 loading={loading === (active as ModeId)}
+                freeMode={isFreeMode}
                 onWorksheet={() => runWorksheet(active as ModeId)}
                 onRun={() => run(active as ModeId)}
                 onCopy={() => copyText(results[active as ModeId] || "")}
@@ -955,6 +1085,7 @@ function ResultPanel({
   blurb,
   text,
   loading,
+  freeMode,
   onWorksheet,
   onRun,
   onCopy,
@@ -965,6 +1096,7 @@ function ResultPanel({
   blurb: string;
   text?: string;
   loading: boolean;
+  freeMode: boolean;
   onWorksheet: () => void;
   onRun: () => void;
   onCopy: () => void;
@@ -1008,7 +1140,17 @@ function ResultPanel({
             disabled={loading}
             className="rounded-lg bg-gold-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-gold-500 disabled:opacity-50"
           >
-            {loading ? "AI 생성 중…" : text ? "AI 보강" : "AI 생성"}
+            {loading
+              ? freeMode
+                ? "생성 중…"
+                : "AI 생성 중…"
+              : freeMode
+                ? text
+                  ? "기본값 다시"
+                  : "기본값 생성"
+                : text
+                  ? "AI 보강"
+                  : "AI 생성"}
           </button>
         </div>
       </div>
@@ -1042,6 +1184,7 @@ function QaPanel({
   setQuestion,
   onAsk,
   onCopy,
+  freeMode,
 }: {
   passage: string;
   qaLog: { q: string; a: string }[];
@@ -1051,6 +1194,7 @@ function QaPanel({
   setQuestion: (v: string) => void;
   onAsk: () => void;
   onCopy: (t: string) => void;
+  freeMode: boolean;
 }) {
   return (
     <div className="rounded-2xl border border-ink-100 bg-white p-4 shadow-sm sm:p-6">
@@ -1058,8 +1202,9 @@ function QaPanel({
         💬 자유 질문
       </h2>
       <p className="mt-0.5 text-xs text-ink-700/60">
-        본문{passage ? ` (${passage})` : ""}과 현재 연구에 대해 질문하세요. 원어,
-        다른 견해, 출처 검증, 적용 점검 등에 사용할 수 있습니다.
+        {freeMode
+          ? "현재는 AI 없이 기본값 모드입니다. 질문 답변은 Claude/GPT/Gemini를 선택한 뒤 사용할 수 있습니다."
+          : `본문${passage ? ` (${passage})` : ""}과 현재 연구에 대해 질문하세요. 원어, 다른 견해, 출처 검증, 적용 점검 등에 사용할 수 있습니다.`}
       </p>
 
       <div className="mt-3 flex gap-2">
@@ -1078,7 +1223,7 @@ function QaPanel({
           disabled={loading || !question.trim()}
           className="shrink-0 rounded-xl bg-gold-600 px-4 text-sm font-semibold text-white hover:bg-gold-500 disabled:opacity-50"
         >
-          {loading ? <Spinner /> : "AI 질문"}
+          {loading ? <Spinner /> : freeMode ? "AI 선택 필요" : "AI 질문"}
         </button>
       </div>
 
